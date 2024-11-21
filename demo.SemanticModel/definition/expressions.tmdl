@@ -1,0 +1,113 @@
+expression base_transacoes = "C:\Users\opusv\OneDrive - vtxcy\Cursos_Novos_vtxcy\Projetos-FluenteBI\demo_git_fabric\transacoes.xlsx" meta [IsParameterQuery=true, Type="Text", IsParameterQueryRequired=true]
+	lineageTag: f874ad4f-a215-4481-a990-3088c4fa6221
+	queryGroup: Parâmetros
+
+	annotation PBI_NavigationStepName = Navigation
+
+	annotation PBI_ResultType = Text
+
+expression data_inicial = #date(2024, 11, 1) meta [IsParameterQuery=true, Type="Date", IsParameterQueryRequired=true]
+	lineageTag: d6f0a04c-4ebe-428e-b3ac-59372d036d5d
+	queryGroup: Parâmetros
+
+	annotation PBI_NavigationStepName = Navigation
+
+	annotation PBI_ResultType = Date
+
+expression getCotacoes = ```
+		let
+		    getCotacoes = (dataInicial as date, dataFinal as date, moeda as text, pagina as number) as table =>
+		    let
+		        url = "https://olinda.bcb.gov.br/olinda/servico/PTAX/versao/v1/odata",
+		        endpoint = "CotacaoMoedaPeriodo(moeda=@moeda,dataInicial=@dataInicial,dataFinalCotacao=@dataFinalCotacao)",
+		        query = [
+		            #"@moeda" = "'" & moeda & "'",
+		            #"@dataInicial" = "'" &  Date.ToText(dataInicial,"MM-dd-yyyy") & "'",
+		            #"@dataFinalCotacao" = "'" & Date.ToText(dataFinal,"MM-dd-yyyy") & "'",
+		            #"$top" = Number.ToText(100),
+		            #"$skip" = Number.ToText((pagina-1)*100),
+		            #"$format"= "json"
+		        ],
+		        request = Web.Contents(
+		            url,
+		            [ RelativePath = endpoint, Query = query ]
+		        ),
+		        response = Json.Document(request, 65001), 
+		        lista = response[value] 
+		    in
+		        Table.FromRecords(lista), 
+		
+		    getCotacoesPaginacao = (dataInicial as date, dataFinal as date, moeda as text) as table =>
+		    let
+		        todasPaginas = List.Generate(
+		            ( ) => [ pagina = 1, cotacao = try getCotacoes(dataInicial, dataFinal, moeda, pagina) otherwise null ],
+		                each [cotacao] <> null and Table.RowCount([cotacao]) > 0,
+		                each [ pagina = [pagina] + 1, cotacao = try getCotacoes( dataInicial, dataFinal, moeda, pagina ) otherwise null],
+		                each [cotacao]
+		        ) 
+		    in
+		        Table.AddColumn(Table.Combine(todasPaginas), "Moeda", each moeda, type text),
+		
+		    processaCotacoes = (dataInicial as date, dataFinal as date) as table =>
+		    let
+		        moedas = List.Select(moedas[Moeda], each _ <> "BRL"),
+		
+		        todasCotacoes = List.Accumulate(
+		            moedas,
+		            #table({},{}),
+		            (s, c) => 
+		            Table.Combine({s, getCotacoesPaginacao(dataInicial, dataFinal, c)})
+		
+		        ),
+		
+		        colunasSelecionadas = Table.SelectColumns(
+		            todasCotacoes,
+		            { "Moeda", "dataHoraCotacao", "cotacaoCompra", "tipoBoletim" }
+		        ),
+		
+		        colunasRenomeadas = Table.RenameColumns(
+		            colunasSelecionadas,
+		            {
+		                {"dataHoraCotacao", "DataHora"},
+		                {"cotacaoCompra", "Cotacao"},
+		                {"tipoBoletim", "TipoBoletim"}
+		            }
+		        ),
+		
+		        tipoAlterado = Table.TransformColumnTypes(
+		            colunasRenomeadas,
+		            {
+		                {"DataHora", DateTime.Type},
+		                {"Cotacao", Number.Type}, 
+		                {"TipoBoletim", Text.Type}
+		            }
+		        ),
+		
+		        dataAdicionada = Table.AddColumn(
+		            tipoAlterado,
+		            "Data", 
+		            each DateTime.Date([DataHora]),
+		            type date
+		        )
+		
+		    in
+		        dataAdicionada   
+		
+		in
+		    processaCotacoes
+		```
+	lineageTag: 25f23916-2458-44a6-853f-afbcbd39a9a7
+	queryGroup: Funções
+
+	annotation PBI_NavigationStepName = Navigation
+
+	annotation PBI_ResultType = Function
+
+expression data_final = DateTime.Date(DateTime.LocalNow())
+	lineageTag: 4e8cb1a4-40a0-48e3-aee8-5ad13e4992ad
+	queryGroup: Parâmetros
+
+	annotation PBI_NavigationStepName = Navigation
+
+	annotation PBI_ResultType = Date
+
